@@ -1,0 +1,33 @@
+# Influx Alarm: web app + Asterisk. Fill in .env first (copy .env.example).
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      AMI_HOST: asterisk
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - app-data:/data
+      - sounds:/data/sounds
+    depends_on:
+      - asterisk
+
+  asterisk:
+    build: ./asterisk
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - sounds:/var/lib/asterisk/sounds/alarm:ro
+    ports:
+      # SIP and media (RTP) towards your VoIP provider
+      - "${SIP_LOCAL_PORT:-5060}:5060/udp"
+      - "${RTP_START:-10000}-${RTP_END:-10100}:${RTP_START:-10000}-${RTP_END:-10100}/udp"
+    # For a GSM dongle (SMS via Asterisk) add e.g.:
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+
+volumes:
+  app-data:
+  sounds:

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Influx Alarm</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar" id="topbar" hidden>
+  <a href="#/" class="brand">Influx Alarm</a>
+  <nav>
+    <a href="#/" data-nav="overview">Overzicht</a>
+    <a href="#/contacts" data-nav="contacts">Contacten</a>
+    <a href="#/log" data-nav="log">Historiek</a>
+    <a href="#/settings" data-nav="settings">Instellingen</a>
+    <a href="#/users" data-nav="users">Gebruikers</a>
+  </nav>
+  <span class="spacer"></span>
+  <span id="checker-status" class="muted small"></span>
+  <span id="whoami" class="muted small"></span>
+  <button id="logout" class="ghost small">Afmelden</button>
+</header>
+<main id="view"></main>
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
