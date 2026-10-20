@@ -474,16 +474,18 @@ function checksPanel() {
       "Alarm als de waarde de hele vertraging lang boven de bovengrens of onder de ondergrens ligt, of als het laatste punt ouder is dan ‘geen data na’. Laat een grens leeg om ze niet te controleren; 0 bij ‘geen data na’ schakelt die controle uit."));
 }
 
+const LOG_CHANNEL = { mail: "Mail", sms: "SMS", call: "Oproep", ack: "Bevestiging", "-": "" };
+const LOG_KIND = { alarm: "alarm", reminder: "herinnering", resolved: "opgelost", test: "test", ignored: "genegeerd", pause: "pauze", ack: "" };
+const logWhat = (l) => [LOG_CHANNEL[l.channel] ?? l.channel, LOG_KIND[l.kind] ?? l.kind].filter(Boolean).join(" · ");
+
 function logPanel(rows) {
-  const LABEL = { mail: "Mail", sms: "SMS", call: "Oproep", ack: "Bevestiging", "-": "" };
-  const KIND = { alarm: "alarm", reminder: "herinnering", resolved: "opgelost", test: "test", ignored: "genegeerd", pause: "pauze", ack: "" };
   return el("section", { class: "card flush" },
     el("div", { class: "card-head", style: "padding:12px 14px 0" }, el("h2", {}, "Historiek")),
     rows.length ? el("div", { class: "table-wrap", style: "max-height:360px" }, el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "Tijd"), el("th", {}, "Wat"), el("th", {}, "Contact"), el("th", {}, "Resultaat"), el("th", {}, "Detail"))),
       el("tbody", {}, rows.map((l) => el("tr", {},
         el("td", { class: "small" }, time(l.ts)),
-        el("td", {}, [LABEL[l.channel] ?? l.channel, KIND[l.kind] ?? l.kind].filter(Boolean).join(" · ")),
+        el("td", {}, logWhat(l)),
         el("td", {}, l.contact || ""),
         el("td", {}, el("span", { class: `log-status log-${l.status}` }, logStatus(l.status))),
         el("td", { class: "small" }, l.detail)))))) : el("p", { class: "empty-state" }, "Nog niets gebeurd."));
@@ -778,12 +780,12 @@ async function renderLog() {
   setView(
     el("div", { class: "page-head" }, el("h1", {}, "Historiek"), el("span", { class: "muted small" }, "laatste 500 gebeurtenissen")),
     el("section", { class: "card flush" }, rows.length ? el("div", { class: "table-wrap" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Tijd"), el("th", {}, "Regel"), el("th", {}, "Kanaal"), el("th", {}, "Soort"),
+      el("thead", {}, el("tr", {}, el("th", {}, "Tijd"), el("th", {}, "Regel"), el("th", {}, "Wat"),
         el("th", {}, "Contact"), el("th", {}, "Resultaat"), el("th", {}, "Detail"))),
       el("tbody", {}, rows.map((l) => el("tr", {},
         el("td", { class: "small" }, time(l.ts)),
         el("td", {}, l.rule_id ? el("a", { href: `#/rule/${l.rule_id}` }, l.rule || `#${l.rule_id}`) : "–"),
-        el("td", {}, l.channel), el("td", {}, l.kind), el("td", {}, l.contact || ""),
+        el("td", {}, logWhat(l)), el("td", {}, l.contact || ""),
         el("td", {}, el("span", { class: `log-status log-${l.status}` }, logStatus(l.status))),
         el("td", { class: "small" }, l.detail)))))) : el("p", { class: "empty-state" }, "Nog niets gebeurd.")));
 }

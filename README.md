@@ -4,6 +4,8 @@ Alarmsysteem voor InfluxDB 2, gebouwd op de [influx browser](https://github.com/
 kies met de browser welke waarden bewaakt worden, stel per waarde grenzen in, en laat het systeem
 mailen, sms'en en bellen (via Asterisk, met "druk 1 om te bevestigen").
 
+📖 **[Handleiding met screenshots](docs/HANDLEIDING.md)**
+
 ## Wat het doet
 
 - **Contactpersonen** met mail en telefoon (testknoppen voor mail, sms en oproep).
