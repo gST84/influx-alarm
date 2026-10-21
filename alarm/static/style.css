@@ -80,6 +80,10 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; }
   position: sticky; top: 0; z-index: 5;
 }
 .brand { font-weight: 700; color: var(--ink); text-decoration: none; }
+.org-switch select { font-weight: 600; padding: 4px 8px; }
+.org-switch b { padding: 4px 8px; background: var(--surface-2); border-radius: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.chips label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
 .topbar nav { display: flex; gap: 4px; flex-wrap: wrap; }
 .topbar nav a { padding: 5px 10px; border-radius: 6px; color: var(--ink-2); text-decoration: none; }
 .topbar nav a.active, .topbar nav a:hover { background: var(--surface-2); color: var(--ink); }

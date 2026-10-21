@@ -17,6 +17,16 @@ _cascade_lock = threading.Lock()
 
 # --- helpers --------------------------------------------------------------------
 
+def with_org(rule):
+    """Rule plus "org_name" — only filled when there is more than one organisation, so messages
+    tell people in several organisations what they are about."""
+    rule = dict(rule)
+    many = (db.one("SELECT COUNT(*) AS n FROM organizations") or {"n": 0})["n"] > 1
+    org = db.one("SELECT name FROM organizations WHERE id = ?", rule.get("org_id")) if many else None
+    rule["org_name"] = org["name"] if org else ""
+    return rule
+
+
 def recipients(rule_id):
     return db.q(
         "SELECT c.*, rc.email AS want_email, rc.sms AS want_sms, rc.call AS want_call, rc.position "
@@ -90,6 +100,7 @@ def _send_sms(cfg, rule, contact, kind, items, alarm_ids):
 def notify(cfg, rule, kind, alarm_ids, now=None):
     """Alarm or reminder: mail + SMS right away, calls as a cascade (deferred during quiet hours)."""
     now = now or time.time()
+    rule = with_org(rule)
     items = load_items(alarm_ids)
     if not items:
         return
@@ -114,6 +125,7 @@ def notify(cfg, rule, kind, alarm_ids, now=None):
 
 def notify_resolved(cfg, rule, alarm_ids):
     """'Resolved' mail to everyone who was notified; SMS too for those who got an SMS or a call."""
+    rule = with_org(rule)
     items = load_items(alarm_ids)
     if not items:
         return
@@ -164,6 +176,7 @@ def _still_relevant(rule_id, alarm_ids, started):
 
 def _cascade(cfg, rule, kind, alarm_ids):
     started = time.time()
+    rule = with_org(rule)  # also for calls deferred by quiet hours
     try:
         items = load_items(alarm_ids)
         callees = [p for p in recipients(rule["id"]) if p["want_call"] and p["phone"]]

@@ -15,7 +15,7 @@ als er iets misloopt: een waarde boven of onder een grens, of een sensor die gee
 8. [Een alarm opvolgen](#8-een-alarm-opvolgen)
 9. [Pauzeren](#9-pauzeren)
 10. [Historiek](#10-historiek)
-11. [Gebruikers](#11-gebruikers)
+11. [Organisaties en gebruikers](#11-organisaties-en-gebruikers)
 12. [Problemen oplossen](#12-problemen-oplossen)
 
 Installeren staat beschreven in de [README](../README.md).
@@ -24,19 +24,24 @@ Installeren staat beschreven in de [README](../README.md).
 
 ## 1. Aanmelden
 
-Open de app in je browser (bv. `http://server:8080`). De allereerste keer vraagt de app om een
-gebruiker aan te maken; daarna meld je je aan met gebruikersnaam en wachtwoord.
+Open de app in je browser (bv. `http://server:8080`). De allereerste keer vraagt de app om de
+eerste **organisatie** en de eerste **beheerder** aan te maken; daarna meld je je aan met
+gebruikersnaam en wachtwoord.
 
 ![Aanmelden](img/01-aanmelden.png)
 
-Je blijft 30 dagen aangemeld op dezelfde browser.
+Je blijft 30 dagen aangemeld op dezelfde browser. Je eigen wachtwoord wijzig je door rechtsboven
+op je **gebruikersnaam** te klikken.
 
 ---
 
 ## 2. Het overzicht
 
-Na het aanmelden zie je alle **regels**. Een regel is een groep waarden die samen bewaakt worden,
-met de mensen die verwittigd moeten worden.
+Na het aanmelden zie je alle **regels** van je organisatie. Een regel is een groep waarden die samen
+bewaakt worden, met de mensen die verwittigd moeten worden.
+
+Heb je toegang tot meerdere organisaties, dan kies je linksboven, naast "Influx Alarm", met welke
+organisatie je werkt. Contacten, regels en historiek horen altijd bij de gekozen organisatie.
 
 ![Overzicht](img/02-overzicht.png)
 
@@ -53,7 +58,8 @@ Rechtsboven zie je wanneer de laatste controle gebeurde. De pagina ververst zich
 
 ## 3. Eerste keer: instellingen
 
-Ga naar **Instellingen** en vul elke sectie in. Elke sectie heeft een testknop; klik eerst op
+*Alleen voor beheerders.* Ga naar **Instellingen** en vul elke sectie in. Deze instellingen gelden
+voor alle organisaties samen. Elke sectie heeft een testknop; klik eerst op
 **Opslaan** of gebruik de testknop (die slaat ook op).
 
 ![Instellingen](img/12-instellingen.png)
@@ -261,12 +267,40 @@ oproepen (met het resultaat), bevestigingen, pauzes.
 
 ---
 
-## 11. Gebruikers
+## 11. Organisaties en gebruikers
 
-Onder **Gebruikers** maak je extra gebruikers aan, wijzig je wachtwoorden en verwijder je
-gebruikers. Elke gebruiker kan alles beheren. Wachtwoorden hebben minstens 8 tekens.
+*Alleen voor beheerders.*
+
+### Organisaties
+
+Een organisatie is bijvoorbeeld een bedrijf, een klant of een site. Elke organisatie heeft haar
+**eigen contactpersonen, regels en historiek**. De **instellingen** (InfluxDB, mail, sms, telefonie)
+zijn voor alle organisaties dezelfde, en elke organisatie kan alle InfluxDB-buckets gebruiken.
+
+![Organisaties](img/16-organisaties.png)
+
+- **Nieuwe organisatie**: naam invullen en *Toevoegen*. Kies ze daarna linksboven om er contacten
+  en regels in te maken.
+- **Hernoemen** kan altijd.
+- **Verwijderen** kan alleen als de organisatie geen regels en contactpersonen meer heeft.
+- Zijn er meerdere organisaties, dan staat de naam van de organisatie in elk bericht, bv.
+  *"[ALARM] Klant B · Koelcellen: 1 waarde in alarm"*. Zo weet iemand die voor meerdere
+  organisaties werkt meteen waarover het gaat.
+
+### Gebruikers en rollen
 
 ![Gebruikers](img/14-gebruikers.png)
+
+| Rol | Mag |
+|---|---|
+| **Beheerder** | alle organisaties, organisaties beheren, gebruikers beheren, de instellingen |
+| **Gebruiker** | alleen de organisaties die aangevinkt zijn: contacten, regels en historiek |
+
+- **Nieuwe gebruiker**: gebruikersnaam, wachtwoord (min. 8 tekens) en toegang: vink *Beheerder*
+  aan, of kies de organisaties.
+- **Toegang** wijzigt de rol en de organisaties van een bestaande gebruiker.
+- **Wachtwoord** stelt een nieuw wachtwoord in (bv. als iemand het vergeten is).
+- Je kunt jezelf niet verwijderen en je eigen beheerdersrechten niet afnemen.
 
 ---
 
@@ -280,5 +314,6 @@ gebruikers. Elke gebruiker kan alles beheren. Wachtwoorden hebben minstens 8 tek
 | Sms "fout" in de historiek | de foutmelding van de provider staat bij Detail; test via Instellingen → SMS |
 | Oproep "niet bereikbaar" of "mislukt" | Instellingen → Telefonie → Asterisk testen: is de provider *geregistreerd*? Controleer de SIP-gegevens in `.env` en het nummerformaat |
 | Wel verbinding, geen geluid aan de telefoon | meestal NAT: vul `EXTERNAL_IP` in `.env` in en open de RTP-poorten (zie README) |
+| "Je bent nog aan geen enkele organisatie gekoppeld" | een beheerder moet je bij **Gebruikers → Toegang** aan een organisatie koppelen |
 | Een sensor verdween uit de lijst bij *Waarden zoeken* | kies een langere periode: alleen sensoren met data in de gekozen periode worden getoond |
 | Te veel berichten bij korte pieken | verhoog de **vertraging** van die waarde |

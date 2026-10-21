@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS log (
 CREATE INDEX IF NOT EXISTS log_rule ON log(rule_id, ts);
 CREATE TABLE IF NOT EXISTS pending_calls (
   id INTEGER PRIMARY KEY, rule_id INTEGER NOT NULL, due REAL NOT NULL, kind TEXT NOT NULL, alarm_ids TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS organizations (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, created REAL);
+CREATE TABLE IF NOT EXISTS user_orgs (user_id INTEGER NOT NULL, org_id INTEGER NOT NULL, PRIMARY KEY (user_id, org_id));
 """
+
+DEFAULT_ORG = "Mijn organisatie"
 
 _local = threading.local()
 _write_lock = threading.RLock()
@@ -72,6 +76,35 @@ def conn():
 def init():
     with _write_lock:
         conn().executescript(SCHEMA)
+        migrate()
+
+
+def _columns(table):
+    return {r[1] for r in conn().execute(f"PRAGMA table_info({table})")}
+
+
+def migrate():
+    """Adds organisations to databases from before they existed; existing data goes to one organisation."""
+    with transaction():
+        if "is_admin" not in _columns("users"):
+            conn().execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+            conn().execute("UPDATE users SET is_admin = 1")  # users from before roles existed manage everything
+        for table in ("contacts", "rules", "log"):
+            if "org_id" not in _columns(table):
+                conn().execute(f"ALTER TABLE {table} ADD COLUMN org_id INTEGER")
+        conn().execute("CREATE INDEX IF NOT EXISTS contacts_org ON contacts(org_id)")
+        conn().execute("CREATE INDEX IF NOT EXISTS rules_org ON rules(org_id)")
+        conn().execute("CREATE INDEX IF NOT EXISTS log_org ON log(org_id, ts)")
+        orphans = any(conn().execute(f"SELECT 1 FROM {t} WHERE org_id IS NULL LIMIT 1").fetchone()
+                      for t in ("contacts", "rules"))
+        if orphans:
+            row = conn().execute("SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()
+            org_id = row[0] if row else conn().execute(
+                "INSERT INTO organizations (name, created) VALUES (?, ?)", (DEFAULT_ORG, time.time())).lastrowid
+            for t in ("contacts", "rules"):
+                conn().execute(f"UPDATE {t} SET org_id = ? WHERE org_id IS NULL", (org_id,))
+            conn().execute("UPDATE log SET org_id = COALESCE((SELECT org_id FROM rules WHERE rules.id = log.rule_id), ?) "
+                           "WHERE org_id IS NULL", (org_id,))
 
 
 def q(sql, *args):
@@ -108,8 +141,9 @@ def now():
 
 def log(rule_id, channel, kind, status, detail="", contact_id=None, alarm_ids=()):
     ids = "," + ",".join(str(i) for i in alarm_ids) + "," if alarm_ids else ""
-    run("INSERT INTO log (ts, rule_id, alarm_ids, contact_id, channel, kind, status, detail) VALUES (?,?,?,?,?,?,?,?)",
-        now(), rule_id, ids, contact_id, channel, kind, status, detail[:2000])
+    run("INSERT INTO log (ts, rule_id, alarm_ids, contact_id, channel, kind, status, detail, org_id) "
+        "VALUES (?,?,?,?,?,?,?,?,(SELECT org_id FROM rules WHERE id = ?))",
+        now(), rule_id, ids, contact_id, channel, kind, status, detail[:2000], rule_id)
 
 
 def jload(s, default=None):

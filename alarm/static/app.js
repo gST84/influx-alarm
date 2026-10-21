@@ -28,10 +28,15 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+// The selected organisation travels with every request.
+let currentOrg = null;
+
 async function api(method, path, body) {
+  const headers = body ? { "Content-Type": "application/json" } : {};
+  if (currentOrg) headers["X-Org"] = String(currentOrg.id);
   const res = await fetch("api/" + path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   let data = null;
@@ -125,12 +130,27 @@ async function route() {
   $("topbar").hidden = !me.user;
   if (me.setup) return renderSetup();
   if (!me.user) return renderLogin();
-  $("whoami").textContent = me.user;
+  $("whoami").textContent = me.user + (me.is_admin ? " (beheerder)" : "");
+  const saved = Number(storeGet("org"));
+  currentOrg = me.orgs.find((o) => o.id === saved) || me.orgs[0] || null;
+  drawOrgSwitch();
+  document.querySelectorAll("[data-admin]").forEach((a) => (a.hidden = !me.is_admin));
   const [, page, id] = (location.hash.replace(/^#/, "") || "/").split("/");
   document.querySelectorAll("[data-nav]").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === (page || "overview") || (page === "rule" && a.dataset.nav === "overview")));
+  const adminPages = ["orgs", "users", "settings"];
+  if (adminPages.includes(page) && !me.is_admin) {
+    location.hash = "#/";
+    return;
+  }
+  if (!currentOrg && !adminPages.includes(page)) {
+    return setView(el("div", { class: "card empty-state" }, me.is_admin
+      ? ["Er is nog geen organisatie. ", el("a", { href: "#/orgs" }, "Maak er een aan.")]
+      : "Je bent nog aan geen enkele organisatie gekoppeld. Vraag een beheerder om toegang."));
+  }
   try {
     if (!page) await renderOverview();
+    else if (page === "orgs") await renderOrgs();
     else if (page === "rule") await renderRule(id);
     else if (page === "contacts") await renderContacts();
     else if (page === "log") await renderLog();
@@ -141,6 +161,33 @@ async function route() {
     if (e.status !== 401) setView(el("div", { class: "card" }, "Fout: " + e.message));
   }
 }
+
+function drawOrgSwitch() {
+  const box = $("org-switch");
+  if (!currentOrg) return box.replaceChildren();
+  if (me.orgs.length === 1) return box.replaceChildren(el("b", {}, currentOrg.name));
+  box.replaceChildren(el("select", {
+    "aria-label": "Organisatie",
+    onchange: (e) => {
+      if (leaveGuard && !leaveGuard()) { e.target.value = currentOrg.id; return; }
+      leaveGuard = null;
+      storeSet("org", e.target.value);
+      if (location.hash.replace(/^#\/?/, "") === "") route();
+      else location.hash = "#/"; // rules and contacts belong to the other organisation
+    },
+  }, me.orgs.map((o) => el("option", { value: o.id, selected: o.id === currentOrg.id }, o.name))));
+}
+
+$("whoami").addEventListener("click", async () => {
+  const current = prompt("Huidig wachtwoord:");
+  if (!current) return;
+  const next = prompt("Nieuw wachtwoord (min. 8 tekens):");
+  if (!next) return;
+  try {
+    await api("PUT", "me/password", { current, password: next });
+    toast("Wachtwoord gewijzigd");
+  } catch (e) { toast(e.message, true); }
+});
 
 $("logout").addEventListener("click", async () => {
   await api("POST", "logout");
@@ -169,21 +216,23 @@ function renderLogin() {
 }
 
 function renderSetup() {
+  const org = el("input", { placeholder: "bv. naam van je bedrijf", required: true });
   const user = el("input", { value: "admin", required: true });
   const pw = el("input", { type: "password", autocomplete: "new-password", minlength: 8, required: true });
   setView(el("div", { class: "card login" },
     el("h1", {}, "Welkom bij Influx Alarm"),
-    el("p", { class: "muted" }, "Maak de eerste gebruiker aan."),
+    el("p", { class: "muted" }, "Maak de eerste organisatie en de eerste beheerder aan."),
     el("form", {
       onsubmit: async (e) => {
         e.preventDefault();
         try {
-          await api("POST", "setup", { username: user.value, password: pw.value });
+          await api("POST", "setup", { username: user.value, password: pw.value, org: org.value });
           location.hash = "#/settings";
           route();
         } catch (err) { toast(err.message, true); }
       },
     },
+    el("label", { class: "field" }, "Organisatie", org),
     el("label", { class: "field" }, "Gebruikersnaam", user),
     el("label", { class: "field" }, "Wachtwoord (min. 8 tekens)", pw),
     el("button", { class: "primary", type: "submit" }, "Aanmaken en aanmelden"))));
@@ -224,7 +273,7 @@ async function renderOverview() {
   });
 
   setView(
-    el("div", { class: "page-head" }, el("h1", {}, "Overzicht"),
+    el("div", { class: "page-head" }, el("h1", {}, "Overzicht"), me.orgs.length > 1 ? el("span", { class: "muted" }, currentOrg.name) : null,
       el("div", { class: "actions" }, el("button", { class: "primary", onclick: () => (location.hash = "#/rule/new") }, "+ Nieuwe regel"))),
     el("div", { class: "summary" },
       tile(count("alarm"), "in alarm", "alarm"), tile(count("ok"), "OK"), tile(count("pending") + count("error"), "aandacht"),
@@ -867,41 +916,120 @@ async function renderSettings() {
 }
 
 // ---------------------------------------------------------------------------
-// Users
+// Organisations (administrators)
 // ---------------------------------------------------------------------------
-async function renderUsers() {
-  const users = await api("GET", "users");
-  const name = el("input", { required: true });
-  const pw = el("input", { type: "password", minlength: 8, required: true, autocomplete: "new-password" });
+async function renderOrgs() {
+  const orgs = await api("GET", "orgs");
+  const name = el("input", { required: true, placeholder: "bv. Bedrijf, klant of site" });
   setView(
-    el("div", { class: "page-head" }, el("h1", {}, "Gebruikers")),
-    el("section", { class: "card" }, el("h2", {}, "Nieuwe gebruiker"),
+    el("div", { class: "page-head" }, el("h1", {}, "Organisaties")),
+    el("p", { class: "muted" }, "Elke organisatie heeft eigen contactpersonen, regels en historiek. InfluxDB, mail, sms en telefonie (Instellingen) zijn gedeeld."),
+    el("section", { class: "card" }, el("h2", {}, "Nieuwe organisatie"),
       el("form", {
         class: "form-row",
         onsubmit: async (e) => {
           e.preventDefault();
-          try { await api("POST", "users", { username: name.value, password: pw.value }); toast("Gebruiker aangemaakt"); renderUsers(); } catch (err) { toast(err.message, true); }
+          try { await api("POST", "orgs", { name: name.value }); toast("Organisatie aangemaakt"); await route(); } catch (err) { toast(err.message, true); }
         },
-      }, el("label", { class: "field" }, "Gebruikersnaam", name), el("label", { class: "field" }, "Wachtwoord (min. 8)", pw),
-      el("button", { class: "primary", type: "submit" }, "Toevoegen"))),
-    el("section", { class: "card flush" }, el("table", {},
-      el("thead", {}, el("tr", {}, el("th", {}, "Gebruiker"), el("th", {}, "Aangemaakt"), el("th", {}, ""))),
-      el("tbody", {}, users.map((u) => el("tr", {},
-        el("td", {}, el("b", {}, u.username), u.username === me.user ? el("span", { class: "muted small" }, " (jij)") : null),
-        el("td", { class: "small" }, time(u.created)),
+      }, el("label", { class: "field" }, "Naam", name), el("button", { class: "primary", type: "submit" }, "Toevoegen"))),
+    el("section", { class: "card flush" }, orgs.length ? el("div", { class: "table-wrap" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Organisatie"), el("th", {}, "Regels"), el("th", {}, "Contacten"),
+        el("th", {}, "Gebruikers met toegang"), el("th", {}, ""))),
+      el("tbody", {}, orgs.map((o) => el("tr", {},
+        el("td", {}, el("b", {}, o.name)),
+        el("td", {}, o.rules), el("td", {}, o.contacts),
+        el("td", { class: "small" }, o.users.length ? o.users.join(", ") : el("span", { class: "muted" }, "alleen beheerders")),
         el("td", {},
           el("button", {
             class: "small ghost",
             onclick: async () => {
-              const p = prompt(`Nieuw wachtwoord voor ${u.username} (min. 8 tekens):`);
-              if (!p) return;
-              try { await api("PUT", `users/${u.id}/password`, { password: p }); toast("Wachtwoord gewijzigd"); } catch (err) { toast(err.message, true); }
+              const n = prompt("Nieuwe naam:", o.name);
+              if (!n || n === o.name) return;
+              try { await api("PUT", `orgs/${o.id}`, { name: n }); await route(); } catch (err) { toast(err.message, true); }
             },
-          }, "Wachtwoord"),
-          u.username !== me.user ? el("button", {
+          }, "Hernoemen"),
+          el("button", {
             class: "small ghost danger",
-            onclick: async () => { if (confirm(`${u.username} verwijderen?`)) { await api("DELETE", `users/${u.id}`); renderUsers(); } },
-          }, "Verwijderen") : null)))))));
+            disabled: o.rules + o.contacts > 0,
+            title: o.rules + o.contacts > 0 ? "Verwijder eerst de regels en contactpersonen van deze organisatie" : "",
+            onclick: async () => {
+              if (!confirm(`Organisatie “${o.name}” verwijderen?`)) return;
+              try { await api("DELETE", `orgs/${o.id}`); await route(); } catch (err) { toast(err.message, true); }
+            },
+          }, "Verwijderen"))))))) : el("p", { class: "empty-state" }, "Nog geen organisaties.")));
+}
+
+// ---------------------------------------------------------------------------
+// Users (administrators)
+// ---------------------------------------------------------------------------
+async function renderUsers() {
+  const [users, orgs] = await Promise.all([api("GET", "users"), api("GET", "orgs")]);
+  const editing = new Set();
+
+  // Role + organisations editor, shared by "new user" and "edit".
+  const access = (u = { is_admin: 0, orgs: currentOrg ? [currentOrg.id] : [] }) => {
+    const admin = el("input", { type: "checkbox", checked: u.is_admin });
+    const boxes = orgs.map((o) => [o.id, el("input", { type: "checkbox", checked: u.orgs.includes(o.id) })]);
+    const orgList = el("div", { class: "chips" }, boxes.map(([id, cb]) => el("label", {}, cb, orgs.find((o) => o.id === id).name)));
+    const sync = () => (orgList.style.opacity = admin.checked ? ".4" : "");
+    admin.addEventListener("change", sync);
+    sync();
+    return {
+      nodes: [el("label", { class: "inline" }, admin, "Beheerder (alle organisaties, gebruikers en instellingen)"), orgList],
+      value: () => ({ is_admin: admin.checked, orgs: boxes.filter(([, cb]) => cb.checked).map(([id]) => id) }),
+    };
+  };
+
+  const name = el("input", { required: true });
+  const pw = el("input", { type: "password", minlength: 8, required: true, autocomplete: "new-password" });
+  const add = access();
+  const orgNames = (ids) => ids.map((id) => orgs.find((o) => o.id === id)?.name).filter(Boolean).join(", ");
+
+  const draw = () => setView(
+    el("div", { class: "page-head" }, el("h1", {}, "Gebruikers")),
+    el("section", { class: "card" }, el("h2", {}, "Nieuwe gebruiker"),
+      el("form", {
+        onsubmit: async (e) => {
+          e.preventDefault();
+          try { await api("POST", "users", { username: name.value, password: pw.value, ...add.value() }); toast("Gebruiker aangemaakt"); renderUsers(); } catch (err) { toast(err.message, true); }
+        },
+      },
+      el("div", { class: "form-row" }, el("label", { class: "field" }, "Gebruikersnaam", name), el("label", { class: "field" }, "Wachtwoord (min. 8)", pw)),
+      el("div", { class: "field", style: "margin:10px 0" }, el("span", {}, "Toegang"), add.nodes),
+      el("button", { class: "primary", type: "submit" }, "Toevoegen"))),
+    el("section", { class: "card flush" }, el("div", { class: "table-wrap" }, el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Gebruiker"), el("th", {}, "Rol"), el("th", {}, "Organisaties"), el("th", {}, "Aangemaakt"), el("th", {}, ""))),
+      el("tbody", {}, users.map((u) => {
+        if (editing.has(u.id)) {
+          const ed = access(u);
+          return el("tr", {},
+            el("td", {}, el("b", {}, u.username)),
+            el("td", { colspan: 3 }, ed.nodes),
+            el("td", {},
+              el("button", { class: "small primary", onclick: async () => { try { await api("PUT", `users/${u.id}`, ed.value()); toast("Opgeslagen"); renderUsers(); } catch (err) { toast(err.message, true); } } }, "Opslaan"),
+              el("button", { class: "small ghost", onclick: () => { editing.delete(u.id); draw(); } }, "Annuleren")));
+        }
+        return el("tr", {},
+          el("td", {}, el("b", {}, u.username), u.username === me.user ? el("span", { class: "muted small" }, " (jij)") : null),
+          el("td", {}, u.is_admin ? "Beheerder" : "Gebruiker"),
+          el("td", { class: "small" }, u.is_admin ? el("span", { class: "muted" }, "alle") : orgNames(u.orgs) || el("span", { style: "color:var(--warn)" }, "geen")),
+          el("td", { class: "small" }, time(u.created)),
+          el("td", {},
+            el("button", { class: "small ghost", onclick: () => { editing.add(u.id); draw(); } }, "Toegang"),
+            el("button", {
+              class: "small ghost",
+              onclick: async () => {
+                const p = prompt(`Nieuw wachtwoord voor ${u.username} (min. 8 tekens):`);
+                if (!p) return;
+                try { await api("PUT", `users/${u.id}/password`, { password: p }); toast("Wachtwoord gewijzigd"); } catch (err) { toast(err.message, true); }
+              },
+            }, "Wachtwoord"),
+            u.username !== me.user ? el("button", {
+              class: "small ghost danger",
+              onclick: async () => { if (confirm(`${u.username} verwijderen?`)) { await api("DELETE", `users/${u.id}`); renderUsers(); } },
+            }, "Verwijderen") : null));
+      }))))));
+  draw();
 }
 
 window.addEventListener("beforeunload", (e) => {

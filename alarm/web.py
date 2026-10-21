@@ -52,9 +52,10 @@ def _validate_password(pw):
 ROUTES = []
 
 
-def route(method, pattern, public=False):
+def route(method, pattern, public=False, admin=False, org=False):
+    """public: no login needed; admin: only for administrators; org: needs a selected organisation."""
     def deco(fn):
-        ROUTES.append((method, re.compile("^" + pattern + "$"), fn, public))
+        ROUTES.append((method, re.compile("^" + pattern + "$"), fn, public, admin, org))
         return fn
     return deco
 
@@ -85,10 +86,37 @@ def _range(q):
     return start, stop
 
 
+# --- organisations & access ----------------------------------------------------------
+
+def user_orgs(user):
+    """Organisations a user may open: all for administrators, otherwise the linked ones."""
+    if user["is_admin"]:
+        return db.q("SELECT id, name FROM organizations ORDER BY name COLLATE NOCASE")
+    return db.q("SELECT o.id, o.name FROM organizations o JOIN user_orgs uo ON uo.org_id = o.id "
+                "WHERE uo.user_id = ? ORDER BY o.name COLLATE NOCASE", user["id"])
+
+
+def _own_rule(org, rid):
+    rule = db.one("SELECT * FROM rules WHERE id = ? AND org_id = ?", int(rid), org)
+    if not rule:
+        raise ApiError(404, "Regel niet gevonden in deze organisatie")
+    return rule
+
+
+def _own_contact(org, cid):
+    contact = db.one("SELECT * FROM contacts WHERE id = ? AND org_id = ?", int(cid), org)
+    if not contact:
+        raise ApiError(404, "Contact niet gevonden in deze organisatie")
+    return contact
+
+
 @route("GET", "/api/me", public=True)
 def api_me(req, user, **_):
     has_users = bool(db.one("SELECT 1 AS x FROM users LIMIT 1"))
-    return {"user": user["username"] if user else None, "setup": not has_users}
+    if not user:
+        return {"user": None, "setup": not has_users}
+    return {"user": user["username"], "id": user["id"], "is_admin": bool(user["is_admin"]), "orgs": user_orgs(user),
+            "setup": False}
 
 
 @route("POST", "/api/setup", public=True)
@@ -99,7 +127,12 @@ def api_setup(req, user, body, **_):
     if not name:
         raise ApiError(400, "Gebruikersnaam is verplicht")
     _validate_password(body.get("password"))
-    uid = db.run("INSERT INTO users (username, pw_hash, created) VALUES (?,?,?)", name, hash_password(body["password"]), time.time())
+    org_name = (body.get("org") or "").strip() or db.DEFAULT_ORG
+    with db.transaction():
+        uid = db.run("INSERT INTO users (username, pw_hash, created, is_admin) VALUES (?,?,?,1)",
+                     name, hash_password(body["password"]), time.time())
+        if not db.one("SELECT 1 AS x FROM organizations LIMIT 1"):
+            db.run("INSERT INTO organizations (name, created) VALUES (?,?)", org_name, time.time())
     return req.start_session(uid, {"user": name})
 
 
@@ -119,12 +152,90 @@ def api_logout(req, user, **_):
     return {"ok": True}
 
 
-@route("GET", "/api/users")
+@route("PUT", "/api/me/password")
+def api_my_password(req, user, body, **_):
+    u = db.one("SELECT pw_hash FROM users WHERE id = ?", user["id"])
+    if not check_password(body.get("current") or "", u["pw_hash"]):
+        raise ApiError(400, "Huidig wachtwoord klopt niet")
+    _validate_password(body.get("password"))
+    db.run("UPDATE users SET pw_hash = ? WHERE id = ?", hash_password(body["password"]), user["id"])
+    return {"ok": True}
+
+
+# --- organisations (administrators) ---------------------------------------------------
+
+@route("GET", "/api/orgs", admin=True)
+def api_orgs(req, user, **_):
+    rows = db.q("SELECT * FROM organizations ORDER BY name COLLATE NOCASE")
+    for o in rows:
+        o["rules"] = db.one("SELECT COUNT(*) AS n FROM rules WHERE org_id = ?", o["id"])["n"]
+        o["contacts"] = db.one("SELECT COUNT(*) AS n FROM contacts WHERE org_id = ?", o["id"])["n"]
+        o["users"] = [r["username"] for r in db.q(
+            "SELECT u.username FROM users u JOIN user_orgs uo ON uo.user_id = u.id WHERE uo.org_id = ? "
+            "ORDER BY u.username", o["id"])]
+    return rows
+
+
+def _org_name(body, exclude=None):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise ApiError(400, "Naam van de organisatie is verplicht")
+    other = db.one("SELECT id FROM organizations WHERE name = ? COLLATE NOCASE", name)
+    if other and other["id"] != exclude:
+        raise ApiError(400, "Die organisatie bestaat al")
+    return name
+
+
+@route("POST", "/api/orgs", admin=True)
+def api_org_add(req, user, body, **_):
+    oid = db.run("INSERT INTO organizations (name, created) VALUES (?,?)", _org_name(body), time.time())
+    return db.one("SELECT * FROM organizations WHERE id = ?", oid)
+
+
+@route("PUT", r"/api/orgs/(?P<oid>\d+)", admin=True)
+def api_org_save(req, user, body, oid, **_):
+    db.run("UPDATE organizations SET name = ? WHERE id = ?", _org_name(body, int(oid)), int(oid))
+    return db.one("SELECT * FROM organizations WHERE id = ?", int(oid))
+
+
+@route("DELETE", r"/api/orgs/(?P<oid>\d+)", admin=True)
+def api_org_delete(req, user, oid, **_):
+    oid = int(oid)
+    if db.one("SELECT 1 AS x FROM rules WHERE org_id = ? UNION SELECT 1 FROM contacts WHERE org_id = ?", oid, oid):
+        raise ApiError(400, "Verwijder eerst de regels en contactpersonen van deze organisatie")
+    with db.transaction():
+        db.run("DELETE FROM user_orgs WHERE org_id = ?", oid)
+        db.run("DELETE FROM log WHERE org_id = ?", oid)
+        db.run("DELETE FROM organizations WHERE id = ?", oid)
+    return {"ok": True}
+
+
+# --- users (administrators) -------------------------------------------------------------
+
+def _user_access(body):
+    is_admin = 1 if body.get("is_admin") else 0
+    orgs = [_int(o, "organisatie") for o in body.get("orgs") or []]
+    known = {o["id"] for o in db.q("SELECT id FROM organizations")}
+    if any(o not in known for o in orgs):
+        raise ApiError(400, "Onbekende organisatie")
+    return is_admin, orgs
+
+
+def _set_user_orgs(uid, orgs):
+    db.run("DELETE FROM user_orgs WHERE user_id = ?", uid)
+    for o in orgs:
+        db.run("INSERT INTO user_orgs (user_id, org_id) VALUES (?,?)", uid, o)
+
+
+@route("GET", "/api/users", admin=True)
 def api_users(req, user, **_):
-    return db.q("SELECT id, username, created FROM users ORDER BY username")
+    rows = db.q("SELECT id, username, created, is_admin FROM users ORDER BY username COLLATE NOCASE")
+    for u in rows:
+        u["orgs"] = [r["org_id"] for r in db.q("SELECT org_id FROM user_orgs WHERE user_id = ?", u["id"])]
+    return rows
 
 
-@route("POST", "/api/users")
+@route("POST", "/api/users", admin=True)
 def api_user_add(req, user, body, **_):
     name = (body.get("username") or "").strip()
     if not name:
@@ -132,41 +243,59 @@ def api_user_add(req, user, body, **_):
     _validate_password(body.get("password"))
     if db.one("SELECT 1 AS x FROM users WHERE username = ?", name):
         raise ApiError(400, "Die gebruikersnaam bestaat al")
-    db.run("INSERT INTO users (username, pw_hash, created) VALUES (?,?,?)", name, hash_password(body["password"]), time.time())
+    is_admin, orgs = _user_access(body)
+    with db.transaction():
+        uid = db.run("INSERT INTO users (username, pw_hash, created, is_admin) VALUES (?,?,?,?)",
+                     name, hash_password(body["password"]), time.time(), is_admin)
+        _set_user_orgs(uid, orgs)
     return {"ok": True}
 
 
-@route("PUT", r"/api/users/(?P<uid>\d+)/password")
+@route("PUT", r"/api/users/(?P<uid>\d+)", admin=True)
+def api_user_save(req, user, body, uid, **_):
+    uid = int(uid)
+    is_admin, orgs = _user_access(body)
+    if uid == user["id"] and not is_admin:
+        raise ApiError(400, "Je kunt je eigen beheerdersrechten niet afnemen")
+    with db.transaction():
+        db.run("UPDATE users SET is_admin = ? WHERE id = ?", is_admin, uid)
+        _set_user_orgs(uid, orgs)
+    return {"ok": True}
+
+
+@route("PUT", r"/api/users/(?P<uid>\d+)/password", admin=True)
 def api_user_password(req, user, body, uid, **_):
     _validate_password(body.get("password"))
     db.run("UPDATE users SET pw_hash = ? WHERE id = ?", hash_password(body["password"]), int(uid))
     return {"ok": True}
 
 
-@route("DELETE", r"/api/users/(?P<uid>\d+)")
+@route("DELETE", r"/api/users/(?P<uid>\d+)", admin=True)
 def api_user_delete(req, user, uid, **_):
     if int(uid) == user["id"]:
         raise ApiError(400, "Je kunt jezelf niet verwijderen")
-    db.run("DELETE FROM sessions WHERE user_id = ?", int(uid))
-    db.run("DELETE FROM users WHERE id = ?", int(uid))
+    with db.transaction():
+        db.run("DELETE FROM sessions WHERE user_id = ?", int(uid))
+        db.run("DELETE FROM user_orgs WHERE user_id = ?", int(uid))
+        db.run("DELETE FROM users WHERE id = ?", int(uid))
     return {"ok": True}
 
 
 # --- settings ---------------------------------------------------------------------
 
-@route("GET", "/api/settings")
+@route("GET", "/api/settings", admin=True)
 def api_settings(req, user, **_):
     return settings.public()
 
 
-@route("PUT", "/api/settings")
+@route("PUT", "/api/settings", admin=True)
 def api_settings_save(req, user, body, **_):
     settings.update(body)
     checker.wake()
     return settings.public()
 
 
-@route("POST", "/api/settings/test")
+@route("POST", "/api/settings/test", admin=True)
 def api_settings_test(req, user, body, **_):
     cfg = settings.get_all()
     what = body.get("what")
@@ -239,40 +368,40 @@ def _contact_fields(body):
     return name, email, phone, (body.get("notes") or "").strip()
 
 
-@route("GET", "/api/contacts")
-def api_contacts(req, user, **_):
-    rows = db.q("SELECT * FROM contacts ORDER BY name COLLATE NOCASE")
+@route("GET", "/api/contacts", org=True)
+def api_contacts(req, user, org, **_):
+    rows = db.q("SELECT * FROM contacts WHERE org_id = ? ORDER BY name COLLATE NOCASE", org)
     used = {r["contact_id"]: r["n"] for r in db.q("SELECT contact_id, COUNT(*) AS n FROM rule_contacts GROUP BY contact_id")}
     for r in rows:
         r["rules"] = used.get(r["id"], 0)
     return rows
 
 
-@route("POST", "/api/contacts")
-def api_contact_add(req, user, body, **_):
-    cid = db.run("INSERT INTO contacts (name, email, phone, notes) VALUES (?,?,?,?)", *_contact_fields(body))
+@route("POST", "/api/contacts", org=True)
+def api_contact_add(req, user, body, org, **_):
+    cid = db.run("INSERT INTO contacts (name, email, phone, notes, org_id) VALUES (?,?,?,?,?)", *_contact_fields(body), org)
     return db.one("SELECT * FROM contacts WHERE id = ?", cid)
 
 
-@route("PUT", r"/api/contacts/(?P<cid>\d+)")
-def api_contact_save(req, user, body, cid, **_):
+@route("PUT", r"/api/contacts/(?P<cid>\d+)", org=True)
+def api_contact_save(req, user, body, cid, org, **_):
+    _own_contact(org, cid)
     db.run("UPDATE contacts SET name = ?, email = ?, phone = ?, notes = ? WHERE id = ?", *_contact_fields(body), int(cid))
     return db.one("SELECT * FROM contacts WHERE id = ?", int(cid))
 
 
-@route("DELETE", r"/api/contacts/(?P<cid>\d+)")
-def api_contact_delete(req, user, cid, **_):
+@route("DELETE", r"/api/contacts/(?P<cid>\d+)", org=True)
+def api_contact_delete(req, user, cid, org, **_):
+    _own_contact(org, cid)
     with db.transaction():
         db.run("DELETE FROM rule_contacts WHERE contact_id = ?", int(cid))
         db.run("DELETE FROM contacts WHERE id = ?", int(cid))
     return {"ok": True}
 
 
-@route("POST", r"/api/contacts/(?P<cid>\d+)/test")
-def api_contact_test(req, user, body, cid, **_):
-    contact = db.one("SELECT * FROM contacts WHERE id = ?", int(cid))
-    if not contact:
-        raise ApiError(404, "Contact niet gevonden")
+@route("POST", r"/api/contacts/(?P<cid>\d+)/test", org=True)
+def api_contact_test(req, user, body, cid, org, **_):
+    contact = _own_contact(org, cid)
     return {"message": notify.test_contact(settings.get_all(), contact, body.get("channel"))}
 
 
@@ -310,9 +439,9 @@ def _rule_summary(rule):
     return rule
 
 
-@route("GET", "/api/rules")
-def api_rules(req, user, **_):
-    rules = [_rule_summary(r) for r in db.q("SELECT * FROM rules ORDER BY name COLLATE NOCASE")]
+@route("GET", "/api/rules", org=True)
+def api_rules(req, user, org, **_):
+    rules = [_rule_summary(r) for r in db.q("SELECT * FROM rules WHERE org_id = ? ORDER BY name COLLATE NOCASE", org)]
     order = {"alarm": 0, "error": 1, "pending": 2, "ok": 3, "empty": 4, "paused": 5}
     return sorted(rules, key=lambda r: (order[r["state"]], r["name"].lower()))
 
@@ -339,8 +468,9 @@ def _rule_detail(rid):
     return rule
 
 
-@route("GET", r"/api/rules/(?P<rid>\d+)")
-def api_rule(req, user, rid, **_):
+@route("GET", r"/api/rules/(?P<rid>\d+)", org=True)
+def api_rule(req, user, rid, org, **_):
+    _own_rule(org, rid)
     return _rule_detail(int(rid))
 
 
@@ -351,7 +481,7 @@ def _hhmm(v, name):
     return v
 
 
-def _save_rule(rid, body):
+def _save_rule(org, rid, body):
     name = (body.get("name") or "").strip()
     if not name:
         raise ApiError(400, "Naam van de regel is verplicht")
@@ -367,6 +497,10 @@ def _save_rule(rid, body):
         max(0, _num_or_none(body.get("cascade_wait_min"), "wachttijd") or 5),
     )
     checks = body.get("checks") or []
+    own = {c["id"] for c in db.q("SELECT id FROM contacts WHERE org_id = ?", org)}
+    for r in body.get("recipients") or []:
+        if _int(r.get("contact_id"), "contact") not in own:
+            raise ApiError(400, "Contactpersoon hoort niet bij deze organisatie")
     for c in checks:
         lower = _num_or_none(c.get("lower"), "ondergrens")
         upper = _num_or_none(c.get("upper"), "bovengrens")
@@ -376,7 +510,8 @@ def _save_rule(rid, body):
         now = time.time()
         if rid is None:
             rid = db.run("INSERT INTO rules (name, message, paused, quiet_enabled, quiet_start, quiet_end, ignore_after_hours, "
-                         "ring_seconds, cascade_wait_min, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?)", *fields, now, now)
+                         "ring_seconds, cascade_wait_min, created, updated, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                         *fields, now, now, org)
         else:
             db.run("UPDATE rules SET name=?, message=?, paused=?, quiet_enabled=?, quiet_start=?, quiet_end=?, "
                    "ignore_after_hours=?, ring_seconds=?, cascade_wait_min=?, updated=? WHERE id=?", *fields, now, rid)
@@ -410,21 +545,20 @@ def _save_rule(rid, body):
     return _rule_detail(rid)
 
 
-@route("POST", "/api/rules")
-def api_rule_add(req, user, body, **_):
-    return _save_rule(None, body)
+@route("POST", "/api/rules", org=True)
+def api_rule_add(req, user, body, org, **_):
+    return _save_rule(org, None, body)
 
 
-@route("PUT", r"/api/rules/(?P<rid>\d+)")
-def api_rule_save(req, user, body, rid, **_):
-    if not db.one("SELECT id FROM rules WHERE id = ?", int(rid)):
-        raise ApiError(404, "Regel niet gevonden")
-    return _save_rule(int(rid), body)
+@route("PUT", r"/api/rules/(?P<rid>\d+)", org=True)
+def api_rule_save(req, user, body, rid, org, **_):
+    _own_rule(org, rid)
+    return _save_rule(org, int(rid), body)
 
 
-@route("DELETE", r"/api/rules/(?P<rid>\d+)")
-def api_rule_delete(req, user, rid, **_):
-    rid = int(rid)
+@route("DELETE", r"/api/rules/(?P<rid>\d+)", org=True)
+def api_rule_delete(req, user, rid, org, **_):
+    rid = _own_rule(org, rid)["id"]
     with db.transaction():
         for table in ("rule_contacts", "checks", "alarms", "pending_calls"):
             db.run(f"DELETE FROM {table} WHERE rule_id = ?", rid)
@@ -432,17 +566,18 @@ def api_rule_delete(req, user, rid, **_):
     return {"ok": True}
 
 
-@route("POST", r"/api/rules/(?P<rid>\d+)/pause")
-def api_rule_pause(req, user, body, rid, **_):
+@route("POST", r"/api/rules/(?P<rid>\d+)/pause", org=True)
+def api_rule_pause(req, user, body, rid, org, **_):
+    _own_rule(org, rid)
     db.run("UPDATE rules SET paused = ?, updated = ? WHERE id = ?", 1 if body.get("paused") else 0, time.time(), int(rid))
     db.log(int(rid), "-", "pause", "ok", f"{'gepauzeerd' if body.get('paused') else 'hervat'} door {user['username']}")
     checker.run_cycle(rule_id=int(rid))
     return _rule_detail(int(rid))
 
 
-@route("POST", r"/api/checks/(?P<cid>\d+)/pause")
-def api_check_pause(req, user, body, cid, **_):
-    c = db.one("SELECT rule_id FROM checks WHERE id = ?", int(cid))
+@route("POST", r"/api/checks/(?P<cid>\d+)/pause", org=True)
+def api_check_pause(req, user, body, cid, org, **_):
+    c = db.one("SELECT c.rule_id FROM checks c JOIN rules r ON r.id = c.rule_id WHERE c.id = ? AND r.org_id = ?", int(cid), org)
     if not c:
         raise ApiError(404, "Controle niet gevonden")
     db.run("UPDATE checks SET paused = ? WHERE id = ?", 1 if body.get("paused") else 0, int(cid))
@@ -450,22 +585,24 @@ def api_check_pause(req, user, body, cid, **_):
     return _rule_detail(c["rule_id"])
 
 
-@route("POST", r"/api/rules/(?P<rid>\d+)/ack")
-def api_rule_ack(req, user, rid, **_):
+@route("POST", r"/api/rules/(?P<rid>\d+)/ack", org=True)
+def api_rule_ack(req, user, rid, org, **_):
+    _own_rule(org, rid)
     notify.acknowledge(int(rid), user["username"])
     return _rule_detail(int(rid))
 
 
-@route("POST", r"/api/rules/(?P<rid>\d+)/check")
-def api_rule_check(req, user, rid, **_):
+@route("POST", r"/api/rules/(?P<rid>\d+)/check", org=True)
+def api_rule_check(req, user, rid, org, **_):
+    _own_rule(org, rid)
     checker.run_cycle(rule_id=int(rid))
     return _rule_detail(int(rid))
 
 
-@route("POST", r"/api/rules/(?P<rid>\d+)/test")
-def api_rule_test(req, user, rid, body, **_):
+@route("POST", r"/api/rules/(?P<rid>\d+)/test", org=True)
+def api_rule_test(req, user, rid, body, org, **_):
     """Sends a test notification to everyone on the rule, with the rule's real values."""
-    rule = db.one("SELECT * FROM rules WHERE id = ?", int(rid))
+    rule = notify.with_org(_own_rule(org, rid))
     cfg = settings.get_all()
     checks = checker.load_checks(int(rid))[:5]
     items = [{"check": c, "alarm": {"kind": "high", "reason": c["reason"] or "testmelding", "started": time.time()}}
@@ -493,14 +630,11 @@ def api_rule_test(req, user, rid, body, **_):
     return {"message": "; ".join(results) or "Geen ontvangers met mail of sms aangevinkt (gebruik de testknoppen bij Contacten om te bellen)"}
 
 
-@route("GET", "/api/log")
-def api_log(req, user, q, **_):
-    rid = q.get("rule_id")
+@route("GET", "/api/log", org=True)
+def api_log(req, user, q, org, **_):
     sql = ("SELECT l.*, c.name AS contact, r.name AS rule FROM log l LEFT JOIN contacts c ON c.id = l.contact_id "
-           "LEFT JOIN rules r ON r.id = l.rule_id")
-    if rid:
-        return db.q(sql + " WHERE l.rule_id = ? ORDER BY l.ts DESC LIMIT 500", int(rid))
-    return db.q(sql + " ORDER BY l.ts DESC LIMIT 500")
+           "LEFT JOIN rules r ON r.id = l.rule_id WHERE l.org_id = ?")
+    return db.q(sql + " ORDER BY l.ts DESC LIMIT 500", org)
 
 
 # --- HTTP plumbing -----------------------------------------------------------------------
@@ -521,7 +655,7 @@ class Handler(BaseHTTPRequestHandler):
         self.session_token = token
         if not token:
             return None
-        return db.one("SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id "
+        return db.one("SELECT u.id, u.username, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id "
                       "WHERE s.token = ? AND s.expires > ?", token, time.time())
 
     def start_session(self, user_id, payload):
@@ -562,12 +696,19 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(length) or b"{}")
             q = {k: v[-1] for k, v in urllib.parse.parse_qs(url.query).items()}
             user = self._user()
-            for m, pattern, fn, public in ROUTES:
+            for m, pattern, fn, public, admin, needs_org in ROUTES:
                 match = pattern.match(path)
                 if m == method and match:
                     if not public and not user:
                         raise ApiError(401, "Niet aangemeld")
-                    return self._send(200, fn(self, user, body=body, q=q, **match.groupdict()))
+                    if admin and not user["is_admin"]:
+                        raise ApiError(403, "Alleen voor beheerders")
+                    org = None
+                    if needs_org:
+                        org = int(self.headers.get("X-Org") or 0)
+                        if org not in {o["id"] for o in user_orgs(user)}:
+                            raise ApiError(403, "Geen toegang tot deze organisatie")
+                    return self._send(200, fn(self, user, body=body, q=q, org=org, **match.groupdict()))
             raise ApiError(404, "Niet gevonden")
         except ApiError as e:
             self._send(e.status, {"error": e.message})

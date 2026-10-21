@@ -120,11 +120,16 @@ def evaluate(check, last, extremes, now):
 TITLES = {"alarm": "ALARM", "reminder": "HERINNERING", "resolved": "OPGELOST", "test": "TEST"}
 
 
+def rule_title(rule):
+    """Rule name, prefixed with the organisation when there are several."""
+    return f"{rule['org_name']} · {rule['name']}" if rule.get("org_name") else rule["name"]
+
+
 def subject(kind, rule, items):
     n = len(items)
     if kind == "resolved":
-        return f"[OPGELOST] {rule['name']}: {n} waarde{'n' if n != 1 else ''} weer in orde"
-    return f"[{TITLES[kind]}] {rule['name']}: {n} waarde{'n' if n != 1 else ''} in alarm"
+        return f"[OPGELOST] {rule_title(rule)}: {n} waarde{'n' if n != 1 else ''} weer in orde"
+    return f"[{TITLES[kind]}] {rule_title(rule)}: {n} waarde{'n' if n != 1 else ''} in alarm"
 
 
 def mail_bodies(kind, rule, items, cfg):
@@ -137,7 +142,7 @@ def mail_bodies(kind, rule, items, cfg):
         "resolved": "Deze waarden zijn weer in orde.",
         "test": "Dit is een testbericht. Zo ziet een alarmmelding eruit.",
     }[kind]
-    lines = [f"{TITLES[kind]} — {rule['name']}", ""]
+    lines = [f"{TITLES[kind]} — {rule_title(rule)}", ""]
     if rule.get("message") and kind != "resolved":
         lines += [rule["message"], ""]
     lines += [intro, ""]
@@ -170,7 +175,7 @@ def mail_bodies(kind, rule, items, cfg):
     body_html = (
         f"<div style='font-family:system-ui,sans-serif;font-size:14px;color:#111'>"
         f"<div style='background:{color};color:#fff;padding:10px 14px;border-radius:6px;font-weight:600'>"
-        f"{TITLES[kind]} — {html.escape(rule['name'])}</div>"
+        f"{TITLES[kind]} — {html.escape(rule_title(rule))}</div>"
         + (f"<p style='font-size:15px'><b>{html.escape(rule['message'])}</b></p>" if rule.get("message") and kind != "resolved" else "")
         + f"<p>{intro}</p>{''.join(rows_html)}"
         f"<p style='margin-top:20px'><a href='{html.escape(link)}'>Bekijk de regel</a></p></div>")
@@ -178,7 +183,7 @@ def mail_bodies(kind, rule, items, cfg):
 
 
 def sms_text(kind, rule, items, limit=320):
-    head = f"{TITLES[kind]} {rule['name']}"
+    head = f"{TITLES[kind]} {rule_title(rule)}"
     if rule.get("message") and kind != "resolved":
         head += f": {rule['message']}"
     parts = []
@@ -209,7 +214,8 @@ def _spoken_name(check):
 
 
 def speech_text(kind, rule, items, max_items=3):
-    out = [f"{'Herinnering. ' if kind == 'reminder' else ''}Alarm voor {rule['name']}."]
+    where = f"{rule['org_name']}, {rule['name']}" if rule.get("org_name") else rule["name"]
+    out = [f"{'Herinnering. ' if kind == 'reminder' else ''}Alarm voor {where}."]
     if rule.get("message"):
         out.append(rule["message"].rstrip(".") + ".")
     for it in items[:max_items]:

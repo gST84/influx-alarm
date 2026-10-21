@@ -9,16 +9,18 @@
 <body>
 <header class="topbar" id="topbar" hidden>
   <a href="#/" class="brand">Influx Alarm</a>
+  <span id="org-switch" class="org-switch"></span>
   <nav>
     <a href="#/" data-nav="overview">Overzicht</a>
     <a href="#/contacts" data-nav="contacts">Contacten</a>
     <a href="#/log" data-nav="log">Historiek</a>
-    <a href="#/settings" data-nav="settings">Instellingen</a>
-    <a href="#/users" data-nav="users">Gebruikers</a>
+    <a href="#/orgs" data-nav="orgs" data-admin>Organisaties</a>
+    <a href="#/users" data-nav="users" data-admin>Gebruikers</a>
+    <a href="#/settings" data-nav="settings" data-admin>Instellingen</a>
   </nav>
   <span class="spacer"></span>
   <span id="checker-status" class="muted small"></span>
-  <span id="whoami" class="muted small"></span>
+  <button id="whoami" class="ghost small" title="Mijn wachtwoord wijzigen"></button>
   <button id="logout" class="ghost small">Afmelden</button>
 </header>
 <main id="view"></main>

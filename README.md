@@ -8,6 +8,9 @@ mailen, sms'en en bellen (via Asterisk, met "druk 1 om te bevestigen").
 
 ## Wat het doet
 
+- **Organisaties**: elke organisatie heeft eigen contactpersonen, regels en historiek; de instellingen
+  (InfluxDB, mail, sms, telefonie) zijn gedeeld. Beheerders zien alles, gewone gebruikers alleen de
+  organisaties waaraan ze gekoppeld zijn.
 - **Contactpersonen** met mail en telefoon (testknoppen voor mail, sms en oproep).
 - **Regels**: per regel kies je met de browser (bucket → measurements → values & tags) de reeksen
   die bewaakt worden, wie verwittigd wordt en hoe:
@@ -38,7 +41,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open daarna `http://<server>:8080`, maak de eerste gebruiker aan, en vul onder **Instellingen**
+Open daarna `http://<server>:8080`, maak de eerste organisatie en beheerder aan, en vul onder **Instellingen**
 InfluxDB, mail (SMTP) en sms in. Elke sectie heeft een testknop.
 
 ### Telefonie
@@ -101,6 +104,6 @@ docker compose up -d --build            # volledige stack
 | `alarm/notify.py` | verzenden, bel-cascade, stille uren, opgelost-berichten |
 | `alarm/influx.py` | InfluxDB-queries (browser en controle) |
 | `alarm/channels/` | AMI (Asterisk), mail, sms, tekst-naar-spraak |
-| `alarm/web.py` | webserver, login en API |
+| `alarm/web.py` | webserver, login, rollen, organisaties en API |
 | `alarm/static/` | webinterface |
 | `asterisk/` | Asterisk-container: config en dialplan (`alarm-call`, `alarm-test`) |
