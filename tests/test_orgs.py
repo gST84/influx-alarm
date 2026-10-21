@@ -125,15 +125,22 @@ class AccessTest(unittest.TestCase):
         self.assertEqual(bert("PUT", "me/password", {"current": "fout", "password": "nieuw12345"})[0], 400)
         self.assertEqual(bert("PUT", "me/password", {"current": "geheim123", "password": "nieuw12345"})[0], 200)
 
-        # The open status page works without login and leaks no contact details.
+        # Without login: overview and status of the values, read-only; no contacts or settings.
         anon = self.client()
-        status, page = anon("GET", "public/status")
+        self.assertTrue(anon("GET", "me")[1]["public"])
+        self.assertEqual([o["name"] for o in anon("GET", "public/orgs")[1]], ["Bedrijf A", "Bedrijf B"])
+        status, rules = anon("GET", "public/rules", org=org_a)
+        self.assertEqual([r["name"] for r in rules], ["Koeling A"])
+        status, detail = anon("GET", f"public/rules/{rule_a['id']}", org=org_a)
         self.assertEqual(status, 200)
-        self.assertEqual([r["name"] for o in page["orgs"] for r in o["rules"]], ["Koeling A"])
-        self.assertNotIn("jan@a.be", json.dumps(page))
+        self.assertNotIn("jan@a.be", json.dumps(detail))
+        self.assertNotIn("recipients", detail)
+        self.assertEqual(anon("GET", f"public/rules/{rule_a['id']}", org=org_b)[0], 404)  # rule of another organisation
         self.assertEqual(anon("GET", "rules", org=org_a)[0], 401)
+        self.assertEqual(anon("GET", "contacts", org=org_a)[0], 401)
         admin("PUT", "settings", {"public_status": "false"})
-        self.assertEqual(anon("GET", "public/status")[0], 404)
+        self.assertEqual(anon("GET", "public/rules", org=org_a)[0], 403)
+        self.assertFalse(anon("GET", "me")[1]["public"])
         admin("PUT", "settings", {"public_status": "true"})
 
         # An organisation with rules or contacts cannot be removed.

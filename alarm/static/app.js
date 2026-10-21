@@ -127,21 +127,42 @@ async function route() {
     setView(el("div", { class: "empty-state" }, "Server niet bereikbaar: " + e.message));
     return;
   }
-  $("topbar").hidden = !me.user;
-  if (me.setup) return renderSetup();
-  if (!me.user) return renderLogin();
-  $("whoami").textContent = me.user + (me.is_admin ? " (beheerder)" : "");
+  if (me.setup) {
+    $("topbar").hidden = true;
+    return renderSetup();
+  }
+  const [, page, id] = (location.hash.replace(/^#/, "") || "/").split("/");
+  // Without login: the overview and the status of the values, read-only (when the administrator allows it).
+  const anon = !me.user;
+  if (anon && (!me.public || page === "login")) {
+    $("topbar").hidden = true;
+    return renderLogin();
+  }
+  $("topbar").hidden = false;
+  if (anon) {
+    try { me.orgs = await api("GET", "public/orgs"); } catch (e) { me.orgs = []; }
+    me.is_admin = false;
+  }
+  $("whoami").hidden = anon;
+  $("logout").textContent = anon ? "Aanmelden" : "Afmelden";
+  document.querySelectorAll("[data-nav=contacts], [data-nav=log]").forEach((a) => (a.hidden = anon));
+  $("whoami").textContent = anon ? "" : me.user + (me.is_admin ? " (beheerder)" : "");
   const saved = Number(storeGet("org"));
   currentOrg = me.orgs.find((o) => o.id === saved) || me.orgs[0] || null;
   drawOrgSwitch();
   document.querySelectorAll("[data-admin]").forEach((a) => (a.hidden = !me.is_admin));
-  const [, page, id] = (location.hash.replace(/^#/, "") || "/").split("/");
   document.querySelectorAll("[data-nav]").forEach((a) =>
     a.classList.toggle("active", a.dataset.nav === (page || "overview") || (page === "rule" && a.dataset.nav === "overview")));
   const adminPages = ["orgs", "users", "settings"];
   if (adminPages.includes(page) && !me.is_admin) {
     location.hash = "#/";
     return;
+  }
+  if (anon) {
+    if (!currentOrg) return setView(el("div", { class: "card empty-state" }, "Er zijn nog geen organisaties."));
+    if (page === "rule" && id) return await renderRuleReadonly(id).catch((e) => setView(el("div", { class: "card" }, "Fout: " + e.message)));
+    if (page) { location.hash = "#/"; return; }
+    return await renderOverview();
   }
   if (!currentOrg && !adminPages.includes(page)) {
     return setView(el("div", { class: "card empty-state" }, me.is_admin
@@ -190,6 +211,10 @@ $("whoami").addEventListener("click", async () => {
 });
 
 $("logout").addEventListener("click", async () => {
+  if (!me.user) {
+    location.hash = "#/login";
+    return;
+  }
   await api("POST", "logout");
   location.hash = "#/";
   route();
@@ -205,13 +230,15 @@ function renderLogin() {
         e.preventDefault();
         try {
           await api("POST", "login", { username: user.value, password: pw.value });
-          route();
+          if (location.hash === "#/login") location.hash = "#/";
+          else route();
         } catch (err) { toast(err.message, true); }
       },
     },
     el("label", { class: "field" }, "Gebruikersnaam", user),
     el("label", { class: "field" }, "Wachtwoord", pw),
-    el("button", { class: "primary", type: "submit" }, "Aanmelden"))));
+    el("button", { class: "primary", type: "submit" }, "Aanmelden")),
+    me.public ? el("p", { class: "small", style: "margin-top:12px" }, el("a", { href: "#/" }, "← Overzicht bekijken zonder aan te melden")) : null));
   user.focus();
 }
 
@@ -252,8 +279,13 @@ setInterval(() => me?.user && updateCheckerStatus(), 30000);
 // Overview
 // ---------------------------------------------------------------------------
 async function renderOverview() {
-  updateCheckerStatus();
-  const rules = await api("GET", "rules");
+  const anon = !me.user;
+  if (anon) {
+    $("checker-status").textContent = me.last_run ? `laatste controle ${ago(me.last_run)}` : "";
+  } else {
+    updateCheckerStatus();
+  }
+  const rules = await api("GET", anon ? "public/rules" : "rules");
   const count = (s) => rules.filter((r) => r.state === s).length;
   const tile = (n, label, status) => el("div", { class: "tile" }, el("b", { style: n && status === "alarm" ? "color:var(--alarm)" : "" }, n), label);
 
@@ -266,7 +298,7 @@ async function renderOverview() {
       el("div", { class: "top" }, el("b", {}, r.name), badge(r.state === "alarm" ? "alarm" : r.state)),
       el("div", { class: "meta" },
         el("span", {}, `${r.counts.checks} waarden${r.counts.paused ? ` (${r.counts.paused} gepauzeerd)` : ""}`),
-        el("span", {}, `${r.contacts} contact${r.contacts === 1 ? "" : "en"}`),
+        anon ? null : el("span", {}, `${r.contacts} contact${r.contacts === 1 ? "" : "en"}`),
         r.counts.ignored ? el("span", {}, `${r.counts.ignored} genegeerd`) : null,
         el("span", {}, `gecontroleerd ${ago(r.checked_at)}`)),
       why ? el("div", { class: "why" }, why) : null);
@@ -274,13 +306,61 @@ async function renderOverview() {
 
   setView(
     el("div", { class: "page-head" }, el("h1", {}, "Overzicht"), me.orgs.length > 1 ? el("span", { class: "muted" }, currentOrg.name) : null,
-      el("div", { class: "actions" }, el("button", { class: "primary", onclick: () => (location.hash = "#/rule/new") }, "+ Nieuwe regel"))),
+      anon ? null : el("div", { class: "actions" }, el("button", { class: "primary", onclick: () => (location.hash = "#/rule/new") }, "+ Nieuwe regel"))),
     el("div", { class: "summary" },
       tile(count("alarm"), "in alarm", "alarm"), tile(count("ok"), "OK"), tile(count("pending") + count("error"), "aandacht"),
       tile(count("paused"), "gepauzeerd")),
     rules.length ? el("div", { class: "rules" }, cards)
-      : el("div", { class: "card empty-state" }, "Nog geen regels. Maak er een met ", el("b", {}, "+ Nieuwe regel"), "."));
-  const timer = setInterval(() => !document.hidden && location.hash.replace(/^#\/?/, "") === "" && renderOverview(), 30000);
+      : el("div", { class: "card empty-state" }, anon ? "Nog geen regels." : ["Nog geen regels. Maak er een met ", el("b", {}, "+ Nieuwe regel"), "."]),
+    anon ? el("p", { class: "small muted" }, "Alleen-lezen. ", el("a", { href: "#/login" }, "Aanmelden"), " om regels en contacten te beheren.") : null);
+  const timer = setInterval(async () => {
+    if (document.hidden || location.hash.replace(/^#\/?/, "") !== "") return;
+    if (anon) me.last_run = (await api("GET", "me")).last_run;
+    renderOverview();
+  }, 30000);
+  cleanup.push(() => clearInterval(timer));
+}
+
+// ---------------------------------------------------------------------------
+// Rule, read-only (without login): the values and their status, no settings
+// ---------------------------------------------------------------------------
+async function renderRuleReadonly(id) {
+  const r = await api("GET", `public/rules/${id}`);
+  const open = r.alarms.filter((a) => !a.resolved && !a.ignored);
+  const resolved = r.alarms.filter((a) => a.resolved);
+  const ignored = r.alarms.filter((a) => !a.resolved && a.ignored);
+  const inAlarm = (c) => ["high", "low", "nodata"].includes(c.status);
+
+  setView(
+    el("div", { class: "page-head" },
+      el("a", { href: "#/" }, "← Overzicht"),
+      el("h1", {}, r.name),
+      badge(r.state)),
+    r.paused ? el("div", { class: "card", style: "background:var(--paused-bg)" }, "⏸ Deze regel is gepauzeerd: er wordt niets gecontroleerd.") : null,
+    open.length ? el("div", { class: "alarm-banner" },
+      el("h2", {}, `${open.length} waarde${open.length === 1 ? "" : "n"} in alarm`),
+      el("ul", {}, open.map((a) => el("li", {}, el("b", {}, a.label), ": ", a.reason,
+        el("span", { class: "muted small" }, ` — sinds ${time(a.started)}`, a.acked ? " · bevestigd" : ""))))) : null,
+    el("section", { class: "card flush" },
+      el("div", { class: "card-head", style: "padding:12px 14px 0" }, el("h2", {}, `Waarden (${r.checks.length})`)),
+      el("div", { class: "table-wrap" }, el("table", {},
+        el("thead", {}, el("tr", {}, el("th", {}, "Waarde"), el("th", { class: "num" }, "Huidige waarde"), el("th", {}, "Laatste data"), el("th", {}, "Status"))),
+        el("tbody", {}, r.checks.map((c) => el("tr", { class: (c.paused ? "is-paused " : "") + (inAlarm(c) ? "is-alarm" : "") },
+          el("td", {}, el("b", {}, c.label)),
+          el("td", { class: "num" }, fmtValue(c.value, c.unit)),
+          el("td", { class: "small" }, ago(c.time)),
+          el("td", {}, badge(c.status || "unknown"), c.reason ? el("div", { class: "reason" }, c.reason) : null))))))),
+    resolved.length ? el("section", { class: "card flush" },
+      el("div", { class: "card-head", style: "padding:12px 14px 0" }, el("h2", {}, "Opgelost in de laatste 24 uur")),
+      el("div", { class: "table-wrap" }, el("table", {},
+        el("thead", {}, el("tr", {}, el("th", {}, "Waarde"), el("th", {}, "Reden"), el("th", {}, "Van"), el("th", {}, "Opgelost"))),
+        el("tbody", {}, resolved.map((a) => el("tr", {},
+          el("td", {}, el("b", {}, a.label)), el("td", { class: "small" }, a.reason),
+          el("td", { class: "small" }, time(a.started)), el("td", { class: "small" }, time(a.resolved)))))))) : null,
+    ignored.length ? el("p", { class: "small muted" }, `${ignored.length} oud alarm genegeerd (te lang niet opgelost): `, ignored.map((a) => a.label).join(", ")) : null,
+    el("p", { class: "small muted" }, `Gecontroleerd ${ago(r.checked_at)}. Alleen-lezen — `, el("a", { href: "#/login" }, "aanmelden"), " om deze regel te beheren."));
+
+  const timer = setInterval(() => !document.hidden && location.hash === `#/rule/${id}` && renderRuleReadonly(id).catch(() => {}), 30000);
   cleanup.push(() => clearInterval(timer));
 }
 
@@ -896,8 +976,8 @@ async function renderSettings() {
           field("public_url", "Adres van deze app", {}, "Voor de link in de mails"),
           field("timezone", "Tijdzone", { placeholder: "Europe/Brussels" }),
           field("tts_voice", "Stem aan de telefoon", { options: [["nl_BE-nathalie-medium", "Nathalie (Vlaams, vrouw)"], ["nl_BE-rdh-medium", "RDH (Vlaams, man)"]] }),
-          field("public_status", "Openbare statuspagina", { options: [["true", "Aan"], ["false", "Uit"]] },
-            el("span", {}, "Iedereen met het adres kan zonder login zien wat in alarm staat: ", el("a", { href: "status", target: "_blank" }, "/status"))))),
+          field("public_status", "Overzicht zonder aanmelden", { options: [["true", "Aan (alleen-lezen)"], ["false", "Uit"]] },
+            "Iedereen die de app opent, ziet zonder login het overzicht en de status van de waarden; instellingen en contacten blijven afgeschermd."))),
       el("section", { class: "card" }, el("h2", {}, "Mail (SMTP)"),
         el("div", { class: "grid2" }, field("smtp_host", "Server", { placeholder: "smtp.gmail.com" }), field("smtp_port", "Poort", { type: "number" }),
           field("smtp_security", "Beveiliging", { options: [["starttls", "STARTTLS (587)"], ["ssl", "SSL/TLS (465)"], ["none", "Geen"]] }),

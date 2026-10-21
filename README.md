@@ -12,7 +12,7 @@ mailen, sms'en en bellen (via Asterisk, met "druk 1 om te bevestigen").
   (InfluxDB, mail, sms, telefonie) zijn gedeeld. Beheerders zien alles, gewone gebruikers alleen de
   organisaties waaraan ze gekoppeld zijn.
 - **Contactpersonen** met mail en telefoon (testknoppen voor mail, sms en oproep).
-- **Statuspagina** op `/status`: zonder login, alleen-lezen, voor op de gsm (uit te zetten).
+- **Zonder aanmelden** het overzicht en de status van de waarden bekijken (alleen-lezen, uit te zetten).
 - **Regels**: per regel kies je met de browser (bucket → measurements → values & tags) de reeksen
   die bewaakt worden, wie verwittigd wordt en hoe:
   - **mail** en **sms** gaan meteen naar iedereen met een vinkje;
