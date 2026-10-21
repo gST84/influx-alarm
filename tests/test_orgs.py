@@ -125,6 +125,17 @@ class AccessTest(unittest.TestCase):
         self.assertEqual(bert("PUT", "me/password", {"current": "fout", "password": "nieuw12345"})[0], 400)
         self.assertEqual(bert("PUT", "me/password", {"current": "geheim123", "password": "nieuw12345"})[0], 200)
 
+        # The open status page works without login and leaks no contact details.
+        anon = self.client()
+        status, page = anon("GET", "public/status")
+        self.assertEqual(status, 200)
+        self.assertEqual([r["name"] for o in page["orgs"] for r in o["rules"]], ["Koeling A"])
+        self.assertNotIn("jan@a.be", json.dumps(page))
+        self.assertEqual(anon("GET", "rules", org=org_a)[0], 401)
+        admin("PUT", "settings", {"public_status": "false"})
+        self.assertEqual(anon("GET", "public/status")[0], 404)
+        admin("PUT", "settings", {"public_status": "true"})
+
         # An organisation with rules or contacts cannot be removed.
         self.assertEqual(admin("DELETE", f"orgs/{org_a}")[0], 400)
         empty = admin("POST", "orgs", {"name": "Leeg"})[1]["id"]

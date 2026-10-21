@@ -16,7 +16,8 @@ als er iets misloopt: een waarde boven of onder een grens, of een sensor die gee
 9. [Pauzeren](#9-pauzeren)
 10. [Historiek](#10-historiek)
 11. [Organisaties en gebruikers](#11-organisaties-en-gebruikers)
-12. [Problemen oplossen](#12-problemen-oplossen)
+12. [Statuspagina zonder login](#12-statuspagina-zonder-login)
+13. [Problemen oplossen](#13-problemen-oplossen)
 
 Installeren staat beschreven in de [README](../README.md).
 
@@ -304,7 +305,29 @@ zijn voor alle organisaties dezelfde, en elke organisatie kan alle InfluxDB-buck
 
 ---
 
-## 12. Problemen oplossen
+## 12. Statuspagina zonder login
+
+Op **`/status`** (bv. `http://server:8080/status`, of via **Statuspagina ↗** bovenaan de app) staat
+een eenvoudige pagina die **iedereen zonder login** kan openen — handig voor een technieker die op
+zijn gsm wil zien wat er in alarm staat of of het al opgelost is.
+
+<img src="img/18-statuspagina-mobiel.png" alt="Statuspagina op een gsm" width="320">
+
+- Bovenaan in één oogopslag: **"Alles in orde"** (groen) of **hoeveel waarden in alarm** (rood).
+- Per regel (gegroepeerd per organisatie): welke waarde, **waarom** en **sinds wanneer**, en of
+  iemand het alarm al **bevestigd** heeft.
+- **Opgelost in de laatste 24 u** klap je per regel open.
+- De pagina ververst zichzelf elke 30 seconden. Draait de controle zelf niet meer, dan staat er een
+  waarschuwing dat de status verouderd kan zijn.
+- De pagina is **alleen-lezen** en toont geen contactgegevens, tags of instellingen.
+- Een beheerder kan de pagina uitzetten onder **Instellingen → Algemeen → Openbare statuspagina**.
+
+> Iedereen die het adres van de app kan bereiken, kan deze pagina zien. Zet ze uit als de app
+> vanop het internet bereikbaar is en de status niet openbaar mag zijn.
+
+---
+
+## 13. Problemen oplossen
 
 | Probleem | Oplossing |
 |---|---|
@@ -315,5 +338,6 @@ zijn voor alle organisaties dezelfde, en elke organisatie kan alle InfluxDB-buck
 | Oproep "niet bereikbaar" of "mislukt" | Instellingen → Telefonie → Asterisk testen: is de provider *geregistreerd*? Controleer de SIP-gegevens in `.env` en het nummerformaat |
 | Wel verbinding, geen geluid aan de telefoon | meestal NAT: vul `EXTERNAL_IP` in `.env` in en open de RTP-poorten (zie README) |
 | "Je bent nog aan geen enkele organisatie gekoppeld" | een beheerder moet je bij **Gebruikers → Toegang** aan een organisatie koppelen |
+| "Geen data in de laatste 30 dagen" | de meter stuurt al meer dan 30 dagen niets; pauzeer of verwijder de waarde als dat normaal is |
 | Een sensor verdween uit de lijst bij *Waarden zoeken* | kies een langere periode: alleen sensoren met data in de gekozen periode worden getoond |
 | Te veel berichten bij korte pieken | verhoog de **vertraging** van die waarde |

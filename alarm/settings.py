@@ -21,6 +21,7 @@ DEFAULTS = {
     "timezone": os.environ.get("TZ", "Europe/Brussels"),
     "tts_voice": "nl_BE-nathalie-medium",
     "caller_id": os.environ.get("CALLER_ID", ""),
+    "public_status": True,  # open status page at /status, without login
     # mail
     "smtp_host": "",
     "smtp_port": 587,
@@ -80,7 +81,9 @@ def update(values):
             continue
         if k in SECRET_KEYS and v == "••••••":
             continue  # unchanged secret
-        if isinstance(DEFAULTS[k], int) and not isinstance(DEFAULTS[k], bool):
+        if isinstance(DEFAULTS[k], bool):
+            v = v in (True, 1, "1", "true", "on")
+        elif isinstance(DEFAULTS[k], int):
             v = int(v)
         db.run("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                k, json.dumps(v))

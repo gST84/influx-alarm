@@ -24,21 +24,34 @@ def unit_of(check):
     return check["measurement"] if check["measurement"] in KNOWN_UNITS else ""
 
 
-def _find(tags, names):
-    lower = {k.lower(): v for k, v in tags.items()}
-    return next((lower[n] for n in names if lower.get(n)), None)
+# Tag values that say nothing about which sensor it is.
+PLACEHOLDERS = {"unknown", "none", "null", "n/a", "na", "-", "?", "onbekend"}
+
+
+def _find(tags, names, suffixes=()):
+    """First tag with one of the given names; else the first whose name ends in a suffix
+    (e.g. "load_alias", "load_id")."""
+    lower = {k.lower(): v for k, v in tags.items() if v and v.lower() not in PLACEHOLDERS}
+    hit = next((lower[n] for n in names if n in lower), None)
+    if hit is None:
+        hit = next((v for k, v in sorted(lower.items()) if k.endswith(suffixes)), None) if suffixes else None
+    return hit
 
 
 def label_of(check):
     """Name shown to people: the user's label, else a name/id tag, else measurement · field."""
     if check.get("label"):
         return check["label"]
-    name, ident = _find(check["tags"], NAME_TAGS), _find(check["tags"], ID_TAGS)
+    name = _find(check["tags"], NAME_TAGS, ("alias", "_name", "naam"))
+    ident = _find(check["tags"], ID_TAGS, ("_id",))
     if name and ident and name != ident:
         return f"{name} ({ident})"
     if name or ident:
         return name or ident
-    return f"{check['measurement']} · {check['field']}"
+    # No usable name: the other tags tell series apart (unit left out, it is shown separately).
+    extra = [f"{k}={v}" for k, v in sorted(check["tags"].items())
+             if k.lower() not in UNIT_TAGS and v and v.lower() not in PLACEHOLDERS][:3]
+    return f"{check['measurement']} · {check['field']}" + (f" ({', '.join(extra)})" if extra else "")
 
 
 def fmt_num(v):
@@ -84,7 +97,8 @@ def evaluate(check, last, extremes, now):
     unit = unit_of(check)
     nodata_s = (check.get("nodata_min") or 0) * 60
     if last is None:
-        return ("nodata", "geen data gevonden") if nodata_s else ("ok", "")
+        # The checker looks back 30 days for the last point.
+        return ("nodata", "geen data in de laatste 30 dagen") if nodata_s else ("ok", "")
     value, t = last
     age = now - t
     if nodata_s and age > nodata_s:

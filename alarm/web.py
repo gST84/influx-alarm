@@ -313,6 +313,40 @@ def api_settings_test(req, user, body, **_):
     return {"message": notify.test_contact(cfg, contact, what)}
 
 
+@route("GET", "/api/public/status", public=True)
+def api_public_status(req, user, **_):
+    """Read-only status for the open /status page: no contacts, tags or settings."""
+    if not settings.get_all().get("public_status"):
+        raise ApiError(404, "De statuspagina staat uit")
+    now = time.time()
+    orgs = []
+    for o in db.q("SELECT id, name FROM organizations ORDER BY name COLLATE NOCASE"):
+        rules = []
+        for r in db.q("SELECT * FROM rules WHERE org_id = ? ORDER BY name COLLATE NOCASE", o["id"]):
+            _rule_summary(r)
+            checks = {c["id"]: c for c in checker.load_checks(r["id"])}
+
+            def item(a):
+                c = checks.get(a["check_id"])
+                return {"label": messages.label_of(c) if c else "verwijderde waarde", "reason": a["reason"],
+                        "kind": a["kind"], "started": a["started"], "resolved": a["resolved"],
+                        "acked": bool(a["acked"]), "ignored": bool(a["ignored"])}
+
+            open_ = [item(a) for a in db.q("SELECT * FROM alarms WHERE rule_id = ? AND resolved IS NULL ORDER BY started",
+                                           r["id"])]
+            resolved = [item(a) for a in db.q(
+                "SELECT * FROM alarms WHERE rule_id = ? AND resolved > ? AND reason NOT LIKE '%(gepauzeerd)%' "
+                "AND reason NOT LIKE '%(controle verwijderd)%' ORDER BY resolved DESC LIMIT 10", r["id"], now - 86400)]
+            rules.append({"name": r["name"], "state": r["state"], "checks": r["counts"]["checks"],
+                          "checked_at": r["checked_at"], "alarms": [a for a in open_ if not a["ignored"]],
+                          "ignored": [a for a in open_ if a["ignored"]], "resolved": resolved})
+        order = {"alarm": 0, "error": 1, "pending": 2, "ok": 3, "empty": 4, "paused": 5}
+        rules.sort(key=lambda r: (order[r["state"]], r["name"].lower()))
+        orgs.append({"name": o["name"], "rules": rules})
+    return {"now": now, "last_run": checker.state["last_run"],
+            "interval": settings.get_all().get("check_interval") or 60, "orgs": orgs}
+
+
 @route("GET", "/api/status")
 def api_status(req, user, **_):
     return {"last_run": checker.state["last_run"], "last_error": checker.state["last_error"], "now": time.time()}
@@ -720,6 +754,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self, path):
         rel = path.rsplit("/", 1)[-1] or "index.html"
+        if rel == "status":
+            rel = "status.html"  # the open status page
         full = os.path.join(STATIC_DIR, rel)
         if not os.path.isfile(full) or os.path.dirname(os.path.realpath(full)) != os.path.realpath(STATIC_DIR):
             full = os.path.join(STATIC_DIR, "index.html")

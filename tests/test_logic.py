@@ -60,6 +60,15 @@ class MessagesTest(unittest.TestCase):
         self.assertEqual(messages.unit_of(c), "°C")
         self.assertEqual(messages.unit_of(check(measurement="victron", tags={"unit": "V"})), "V")
 
+    def test_label_from_tag_suffixes(self):
+        tags = {"breaker": "Q101", "load_alias": "jonkveestal", "load_id": "STA10", "site": "D119", "unit": "W"}
+        self.assertEqual(messages.label_of(check(measurement="CompacT_NS", field="total_active_power", tags=tags)),
+                         "jonkveestal (STA10)")
+
+    def test_label_skips_placeholders(self):
+        tags = {"breaker": "Q7", "load_alias": "unknown", "load_id": "unknown", "site": "D119", "unit": "W"}
+        self.assertEqual(messages.label_of(check(measurement="EMDX3", field="p", tags=tags)), "EMDX3 · p (breaker=Q7, site=D119)")
+
     def test_sms_is_short(self):
         rule = {"id": 1, "name": "Koeling", "message": "Bel de technieker"}
         items = [{"check": check(label=f"Sensor {i}"), "alarm": {"kind": "high", "reason": "8 °C boven 7 °C"}}
